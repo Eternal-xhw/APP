@@ -1,0 +1,17 @@
+appname="Hydrogen"
+appver="final"
+appcode="8"
+appsdk="21"
+path_pattern=""
+packagename="com.zhihu.hydrogen"
+theme="Theme_Material"
+app_key=""
+app_channel=""
+developer=""
+description=""
+debugmode=false
+user_permission={
+  "INTERNET",
+  "READ_EXTERNAL_STORAGE",
+  "WRITE_EXTERNAL_STORAGE"
+}
