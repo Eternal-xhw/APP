@@ -45,11 +45,11 @@ onMounted(async () => {
     });
 
     // 开源提示
-    checkTipVersion('opensource_tip', 1769350802686, () => {
-      f7.dialog.confirm('该项目已开源，是否跳转到 GitHub 查看源码？', '开源提示', () => {
-        window.open('https://github.com/zhihulite/zhihu_web', '_blank');
-      });
-    });
+    // checkTipVersion('opensource_tip', 1769350802686, () => {
+    //   f7.dialog.confirm('该项目已开源，是否跳转到 GitHub 查看源码？', '开源提示', () => {
+    //     window.open('https://github.com/zhihulite/zhihu_web', '_blank');
+    //   });
+    // });
 
     // 仅在默认默认开启时处理
     const panel = f7.panel.get("left");

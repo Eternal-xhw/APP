@@ -34,6 +34,36 @@ tabs.value.forEach(tab => {
     };
 });
 
+const finalizePtrRefresh = (...args) => {
+    const flatArgs = args.flat ? args.flat() : args;
+
+    for (const arg of flatArgs) {
+        if (typeof arg === 'function') {
+            arg();
+            return;
+        }
+    }
+
+    for (const arg of flatArgs) {
+        const doneFromEvent = arg?.detail?.done;
+        if (typeof doneFromEvent === 'function') {
+            doneFromEvent();
+            return;
+        }
+    }
+};
+
+const REFRESH_TIMEOUT_MS = 15000;
+
+const waitForWithTimeout = (task, timeoutMs = REFRESH_TIMEOUT_MS) => {
+    return Promise.race([
+        task,
+        new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('refresh-timeout')), timeoutMs);
+        })
+    ]);
+};
+
 const fetchTabData = async (tabId, isRefresh = false) => {
     const state = tabData[tabId];
     if (state.loading) return;
@@ -123,9 +153,16 @@ const mapItem = (tabId, item) => {
     }
 };
 
-const onRefresh = async (tabId, done) => {
-    await fetchTabData(tabId, true);
-    if (done) done();
+const onRefresh = async (tabId, ...refreshArgs) => {
+    try {
+        await waitForWithTimeout(fetchTabData(tabId, true));
+    } catch (e) {
+        if (e?.message === 'refresh-timeout') {
+            tabData[tabId].loading = false;
+        }
+    } finally {
+        finalizePtrRefresh(...refreshArgs);
+    }
 };
 
 const onInfinite = (tabId) => {
@@ -188,7 +225,7 @@ watch(userId, (newId) => {
         <f7-tabs class="tabs-auto-page-content" swipeable animated>
             <f7-tab v-for="tab in tabs" :key="tab.id" :id="`tab-${tab.id}`" :tab-active="activeTab === tab.id"
                 class="following-tab-content" @tab:show="activeTab = tab.id">
-                <f7-page-content ptr @ptr:refresh="(done) => onRefresh(tab.id, done)" infinite
+                <f7-page-content ptr @ptr:refresh="(...args) => onRefresh(tab.id, ...args)" infinite
                     @infinite="onInfinite(tab.id)" class="tab-scroll-content">
                     <div class="card-list-container">
                         <f7-card v-for="item in tabData[tab.id].list" :key="item.id" class="following-item-card"

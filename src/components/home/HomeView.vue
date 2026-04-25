@@ -102,6 +102,43 @@ const recommendList = ref([]);
 const hasMoreRecommend = ref(true);
 const isRecommendLoading = ref(false);
 
+const finalizePtrRefresh = (...args) => {
+    const flatArgs = args.flat ? args.flat() : args;
+
+    for (const arg of flatArgs) {
+        if (typeof arg === 'function') {
+            arg();
+            return;
+        }
+    }
+
+    for (const arg of flatArgs) {
+        const doneFromEvent = arg?.detail?.done;
+        if (typeof doneFromEvent === 'function') {
+            doneFromEvent();
+            return;
+        }
+    }
+};
+
+const withRefreshTs = (url) => {
+    const [base, hash = ''] = url.split('#');
+    const sep = base.includes('?') ? '&' : '?';
+    const nextUrl = `${base}${sep}_refresh_ts=${Date.now()}`;
+    return hash ? `${nextUrl}#${hash}` : nextUrl;
+};
+
+const REFRESH_TIMEOUT_MS = 15000;
+
+const waitForWithTimeout = (task, timeoutMs = REFRESH_TIMEOUT_MS) => {
+    return Promise.race([
+        task,
+        new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('refresh-timeout')), timeoutMs);
+        })
+    ]);
+};
+
 const fetchRecommendData = async (isRefresh = false) => {
     if (isRecommendLoading.value) return;
     isRecommendLoading.value = true;
@@ -130,10 +167,12 @@ const fetchRecommendData = async (isRefresh = false) => {
                     url = `https://api.zhihu.com/feed-root/section/${section_id}?channelStyle=0`;
                 }
             }
-            res = !lastRecommendResult.value ? await $http.get(url, { isWWW: true }) : await lastRecommendResult.value.prev();
+            res = await $http.get(withRefreshTs(url), { isWWW: true });
         } else {
             res = await lastRecommendResult.value.next();
         }
+
+        if (!res) return;
 
         const rawList = res.data || [];
         const recommendDataList = rawList.map(item => {
@@ -253,9 +292,16 @@ const handleTabSelected = (pos) => {
     fetchRecommendData(true);
 };
 
-const onRecommendRefresh = async (done) => {
-    await fetchRecommendData(true);
-    done();
+const onRecommendRefresh = async (...refreshArgs) => {
+    try {
+        await waitForWithTimeout(fetchRecommendData(true));
+    } catch (e) {
+        if (e?.message === 'refresh-timeout') {
+            isRecommendLoading.value = false;
+        }
+    } finally {
+        finalizePtrRefresh(...refreshArgs);
+    }
 };
 
 const onRecommendInfinite = () => {
@@ -459,28 +505,32 @@ const fetchMomentsData = async (tabId, isRefresh = false) => {
         if (isRefresh || !state.lastResult) {
             const feedType = momentsTabs.find(t => t.id === tabId)?.feedType;
             const url = `https://api.zhihu.com/moments_v3?feed_type=${feedType}`;
-            res = !state.lastResult ? await $http.get(url) : await state.lastResult.prev();
+            res = await $http.get(withRefreshTs(url));
         } else {
             res = await state.lastResult.next();
         }
 
+        if (!res) return;
+
         const rawList = res.data || [];
 
-        const mappedList = rawList.map(item => {
+        const mappedList = [];
+        rawList.forEach(item => {
             switch (item.type) {
-                case 'moments_feed':
-                    return resolveMomentsFeed(item);
+                case 'moments_feed': {
+                    const resolved = resolveMomentsFeed(item);
+                    if (resolved) mappedList.push(resolved);
                     break;
-
-                case 'feed_item_index_group':
-                    return resolveFeedItemIndexGroup(item);
+                }
+                case 'feed_item_index_group': {
+                    const resolved = resolveFeedItemIndexGroup(item);
+                    if (resolved) mappedList.push(resolved);
                     break;
-
-                case 'item_group_card':
+                }
+                case 'item_group_card': {
                     // 简化item_group_card处理 直接将分组数据作为一个整体对象
-
                     const actionText = item.action_text || '';
-                    const actor = item.actor;
+                    const actor = item.actor || {};
                     const authorName = actor.name || '未知用户';
                     const avatarUrl = actor.avatar_url || '';
                     const timeText = item.action_time ? new Date(item.action_time * 1000).toLocaleDateString() : '';
@@ -502,14 +552,13 @@ const fetchMomentsData = async (tabId, isRefresh = false) => {
                         unfoldShowSize: item.unfold_show_size || 0,
                         expanded: false
                     };
-                    return groupItem;
+                    mappedList.push(groupItem);
                     break;
-
+                }
                 case 'recommend_user_card_list':
                     // 处理推荐用户卡片列表 保持原type不变
-                    return item;
+                    mappedList.push(item);
                     break;
-
                 case 'moments_recommend_followed_group':
                     if (item.list?.length > 0) {
                         // 为moments_recommend_followed_group类型添加group_start标记，确保groupText显示在顶部
@@ -521,12 +570,10 @@ const fetchMomentsData = async (tabId, isRefresh = false) => {
                         mappedList.push(groupStartItem);
 
                         const resolved = resolveMomentsFeed(item.list[0]);
-                        return resolved;
+                        if (resolved) mappedList.push(resolved);
                     }
                     break;
-
                 default:
-                    //console.log(item);
                     break;
             }
         });
@@ -577,9 +624,16 @@ const fetchMomentsData = async (tabId, isRefresh = false) => {
     }
 };
 
-const onMomentsRefresh = async (tabId, done) => {
-    await fetchMomentsData(tabId, true);
-    if (done) done();
+const onMomentsRefresh = async (tabId, ...refreshArgs) => {
+    try {
+        await waitForWithTimeout(fetchMomentsData(tabId, true));
+    } catch (e) {
+        if (e?.message === 'refresh-timeout') {
+            momentsTabData[tabId].loading = false;
+        }
+    } finally {
+        finalizePtrRefresh(...refreshArgs);
+    }
 };
 
 const onMomentsInfinite = (tabId) => {
@@ -689,10 +743,12 @@ const fetchThoughtsData = async (isRefresh = false) => {
 
         if (isRefresh || !lastThoughtsResult.value) {
             // 刷新时，根据section_id构建初始URL
-            res = !lastThoughtsResult.value ? await $http.get(url) : await lastThoughtsResult.value.prev();
+            res = await $http.get(withRefreshTs(url));
         } else {
             res = await lastThoughtsResult.value.next();
         }
+
+        if (!res) return;
 
         const rawList = res.data || [];
         const mappedList = rawList.map(item => {
@@ -739,9 +795,16 @@ const fetchThoughtsData = async (isRefresh = false) => {
     }
 };
 
-const onThoughtsRefresh = async (done) => {
-    await fetchThoughtsData(true);
-    done();
+const onThoughtsRefresh = async (...refreshArgs) => {
+    try {
+        await waitForWithTimeout(fetchThoughtsData(true));
+    } catch (e) {
+        if (e?.message === 'refresh-timeout') {
+            isThoughtsLoading.value = false;
+        }
+    } finally {
+        finalizePtrRefresh(...refreshArgs);
+    }
 };
 
 const onThoughtsInfinite = () => {
@@ -848,7 +911,7 @@ watch(currentSectionIndex, refreshHighlight);
                 <TabLayout v-else :tabs="momentsTabs" :onChange="(id) => handleMomentsTabChange(id)" :nested="true"
                     :autoPageContent="false" :fixed="false" :initialActiveId="momentsActiveTab">
                     <template v-for="tab in momentsTabs" :key="tab.id" #[tab.id]>
-                        <f7-page-content ptr @ptr:refresh="(done) => onMomentsRefresh(tab.id, done)" infinite
+                        <f7-page-content ptr @ptr:refresh="(...args) => onMomentsRefresh(tab.id, ...args)" infinite
                             @infinite="onMomentsInfinite(tab.id)" class="moments-scroll-content">
                             <div class="moments-list">
 
